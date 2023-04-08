@@ -4,175 +4,177 @@
 #include <stdbool.h>
 
 
-/*---- Defines for table processing ----*/
-#define OFFSET_MASK        0xFFFLU
-#define TABLE_MASK         0x1FFLU << 12
-#define DIRECTORY_MASK     0x1FFLU << 21
-#define DIRECTORY_PTR_MASK 0x1FFLU << 30
-#define PML4_MASK          0x1FFLU << 39
-
-/*---- Define for table values processing ----*/
-#define PHYSICAL_ADDRES_MASK_SHIFT 12
-#define PHYSICAL_ADDRES_MASK       0xFFFFFFFFFFLU << PHYSICAL_ADDRES_MASK_SHIFT
+#define ENTRY_VALID_BIT_MASK 0b01LU
+#define PHYSICAL_ADDRESS_SHIFT 12
+#define PHYSICAL_ADDRESS_MASK (0xFFFFFFFFFFLU << PHYSICAL_ADDRESS_SHIFT)
 
 
-typedef struct table_entry {
+enum LEVEL_TYPE {
+    PML4,
+    DIRECTORY_PTR,
+    DIRECTORY,
+    TABLE,
+    PHYS_SEGMENT
+};
+
+enum LEVEL_SHIFTS {
+    PML4_SHIFT=39,
+    DIRECTORY_PTR_SHIFT=30,
+    DIRECTORY_SHIFT=21,
+    TABLE_SHIFT=12
+};
+
+enum LEVEL_MASKS {
+    PML4_MASK = (0x1FFLU<<PML4_SHIFT),
+    DIRECTORY_PTR_MASK = (0x1FFLU<<DIRECTORY_PTR_SHIFT),
+    DIRECTORY_MASK = (0x1FFLU<<DIRECTORY_SHIFT),
+    TABLE_MASK = (0x1FFLU<<TABLE_SHIFT),
+    OFFSET_MASK = 0xFFF
+};
+
+
+struct table_entry {
     uint64_t paddr;
     uint64_t value;
-} table_entry;
+};
 
 
-/*---- Tables processing ----*/
-uint64_t get_table_shift(uint64_t logic_address,
-                         uint64_t logic_address_level) {
-    return (logic_address & logic_address_level)*8;
-}
+uint8_t init(char input_file[],
+             uint32_t *table_entries_num,
+             uint64_t *queries_num,
+             uint64_t *root_tab_base,
+             uint64_t *queries[],
+             struct table_entry *table_entries[]);
 
-uint64_t get_addr_of_table1_val(uint64_t logic_address,
-                             uint64_t table1_address) {
-    return table1_address + (get_table_shift(logic_address, PML4_MASK) >> 39);
-}
+uint64_t get_tab_entry_addr(uint64_t logical_addr,
+                           uint64_t curr_tab_base,
+                           enum LEVEL_TYPE tab_type);
 
-uint64_t get_addr_of_table2_val(uint64_t logic_address,
-                              uint64_t table2_address) {
-    return table2_address + (get_table_shift(logic_address, DIRECTORY_PTR_MASK) >> 30);
-}
-
-uint64_t get_addr_of_table3_val(uint64_t logic_address,
-                             uint64_t table3_address) {
-    return table3_address + (get_table_shift(logic_address, DIRECTORY_MASK) >> 21);
-}
-
-uint64_t get_addr_of_table4_val(uint64_t logic_address,
-                              uint64_t table4_address) {
-    return table4_address + (get_table_shift(logic_address, TABLE_MASK) >> 12);
-}
-
-uint64_t get_addr_of_phys_page_val(uint64_t logic_address,
-                               uint64_t phys_page_address) {
-    return phys_page_address + (logic_address & OFFSET_MASK);
-}
-
-/*---- Table values processing ----*/
-uint64_t get_phys_addr_from_tab_val(uint64_t table_val) {
-    return (table_val & PHYSICAL_ADDRES_MASK);
-}
-
-bool entry_is_used(uint64_t table_val) {
-    return table_val & 0x01;
-}
-
-uint64_t find_val_by_addr(table_entry *table_entries, uint32_t m, uint64_t addr) {
-    uint64_t finding_value = 0;
-    for(size_t j = 0; j < m; ++j) {
-        if(table_entries[j].paddr == addr) {
-            finding_value = table_entries[j].value;
-            break;
-        }
-    }
-    return finding_value;
-}
+uint64_t find_val_by_addr(uint64_t addr, struct table_entry *table_entries, uint32_t table_entries_num);
 
 
 int main()
 {
-    FILE* input;
     FILE *output;
-    uint32_t m;
-    uint64_t q;
-    uint64_t r;
-    table_entry *table_entries;
-    uint64_t *logical_addresses;
-
-    input = fopen("dataset_44327_15.txt", "r");
-    output = fopen("result.txt", "w");
-    if(input == NULL || output == NULL)
-        return 1;
- 
-    fscanf(input, "%u%lu%lu", &m, &q, &r);
+    uint32_t table_entries_num;
+    uint64_t queries_num;
+    uint64_t root_tab_base;
+    uint64_t *queries;
+    struct table_entry *table_entries;
     
-    table_entries = malloc(m * sizeof(table_entry));
-    for(size_t i = 0; i < m; ++i) {
-        fscanf(input, "%lu%lu", &table_entries[i].paddr, &table_entries[i].value);
+
+    if(!init("test/dataset_44327_15.txt",
+             &table_entries_num,
+             &queries_num,
+             &root_tab_base,
+             &queries,
+             &table_entries)) {
+        return 1;
     }
 
-    logical_addresses = malloc(q * sizeof(uint64_t));
-    for(size_t i = 0; i < q; ++i) {
-        fscanf(input, "%lu", &logical_addresses[i]);
+
+    output = fopen("test/result.txt", "w");
+    if(output == NULL) {
+        return 1;
+    }
+    uint64_t tab_base = 0;
+    struct table_entry tab_entry = {0, 0};
+    enum LEVEL_TYPE table_levels[] = {PML4, DIRECTORY_PTR, DIRECTORY, TABLE, PHYS_SEGMENT};
+    const uint8_t LEVELS = sizeof(table_levels)/sizeof(enum LEVEL_TYPE);
+
+    for(size_t i = 0; i < queries_num; ++i) {
+        tab_base = root_tab_base;
+        for(size_t level = 0; level < LEVELS; ++level) {
+            tab_entry.paddr = get_tab_entry_addr(queries[i], tab_base, table_levels[level]);
+            if(level == LEVELS-1) {
+                fprintf(output, "%lu\n", tab_entry.paddr);
+                break;
+            }
+
+            tab_entry.value = find_val_by_addr(tab_entry.paddr, table_entries, table_entries_num);
+            if((tab_entry.value & ENTRY_VALID_BIT_MASK) == 0) {
+                fprintf(output, "fault\n");
+                break;
+            }
+
+            tab_base = tab_entry.value & PHYSICAL_ADDRESS_MASK;
+        }
+    }
+
+
+    fclose(output);
+    free(queries);
+    free(table_entries);
+    return 0;
+}
+
+
+uint8_t init(char input_file[],
+             uint32_t *table_entries_num,
+             uint64_t *queries_num,
+             uint64_t *root_tab_base,
+             uint64_t *queries[],
+             struct table_entry *table_entries[]) {
+    FILE *input;
+    input = fopen(input_file, "r");
+    if(input == NULL)
+        return 0;
+
+    fscanf(input, "%u%lu%lu",
+           table_entries_num,
+           queries_num,
+           root_tab_base);
+    
+    *table_entries = malloc(*table_entries_num * sizeof(struct table_entry));
+    for(size_t i = 0; i < *table_entries_num; ++i) {
+        fscanf(input, "%lu%lu", &(*table_entries)[i].paddr, &(*table_entries)[i].value);
+    }
+
+    *queries = malloc(*queries_num * sizeof(uint64_t));
+    if(queries == NULL) {
+        exit(1);
+    }
+    for(size_t i = 0; i < *queries_num; ++i) {
+        fscanf(input, "%lu", &(*queries)[i]);
     }
 
     fclose(input);
 
+    return 1;
+}
 
-    uint64_t curr_table_base_addr = 0;
-    for(size_t i = 0; i < q; ++i) {
-        curr_table_base_addr = r;
-        uint64_t curr_addr = get_addr_of_table1_val(logical_addresses[i],
-                                           curr_table_base_addr);
-
-        uint64_t finding_value = find_val_by_addr(table_entries, m, curr_addr);
-        if(finding_value == 0 ||
-           !entry_is_used(finding_value)) {
-            fprintf(output, "fault\n");
-            continue;
-        }
-        //printf("%lu\n", finding_value);
-
-        curr_table_base_addr = get_phys_addr_from_tab_val(finding_value);
-        curr_addr = get_addr_of_table2_val(logical_addresses[i],
-                                           curr_table_base_addr);
-
-        finding_value = find_val_by_addr(table_entries, m, curr_addr);
-        if(finding_value == 0 ||
-           !entry_is_used(finding_value)) {
-            fprintf(output, "fault\n");
-            continue;
-        }
-        //printf("%lu\n", finding_value);
-
-        curr_table_base_addr = get_phys_addr_from_tab_val(finding_value);
-        curr_addr = get_addr_of_table3_val(logical_addresses[i],
-                                           curr_table_base_addr);
-
-        finding_value = find_val_by_addr(table_entries, m, curr_addr);
-        if(finding_value == 0 ||
-           !entry_is_used(finding_value)) {
-            fprintf(output, "fault\n");
-            continue;
-        }
-        //printf("%lu\n", finding_value);
-
-        curr_table_base_addr = get_phys_addr_from_tab_val(finding_value);
-        curr_addr = get_addr_of_table4_val(logical_addresses[i],
-                                           curr_table_base_addr);
-
-        finding_value = find_val_by_addr(table_entries, m, curr_addr);
-        if(finding_value == 0 ||
-           !entry_is_used(finding_value)) {
-            fprintf(output, "fault\n");
-            continue;
-        }
-        //printf("%lu\n", finding_value);
-
-        curr_table_base_addr = get_phys_addr_from_tab_val(finding_value);
-        curr_addr = get_addr_of_phys_page_val(logical_addresses[i],
-                                              curr_table_base_addr);
-
-        finding_value =(curr_addr);
-        fprintf(output, "%lu\n", finding_value);
+uint64_t get_tab_entry_addr(uint64_t logical_addr,
+                            uint64_t curr_tab_base,
+                            enum LEVEL_TYPE tab_type) {
+    uint64_t tab_entry_addr = 0;
+    
+    switch(tab_type) {
+    case PML4:
+        tab_entry_addr = curr_tab_base + ((logical_addr & PML4_MASK)>>PML4_SHIFT)*8;
+        break;
+    case DIRECTORY_PTR:
+        tab_entry_addr = curr_tab_base + ((logical_addr & DIRECTORY_PTR_MASK)>>DIRECTORY_PTR_SHIFT)*8;
+        break;
+    case DIRECTORY:
+        tab_entry_addr = curr_tab_base + ((logical_addr & DIRECTORY_MASK)>>DIRECTORY_SHIFT)*8;
+        break;
+    case TABLE:
+        tab_entry_addr = curr_tab_base + ((logical_addr & TABLE_MASK)>>TABLE_SHIFT)*8;
+        break;
+    case PHYS_SEGMENT:
+        tab_entry_addr = curr_tab_base + (logical_addr & OFFSET_MASK);
+        break;
     }
 
+    return tab_entry_addr;
+}
 
-    //printf("m: %u\nq: %lu\nr: %lu\n", m, q, r);
-    //for(size_t i = 0; i < m; ++i) {
-    //    printf("%lu %lu\n", table_entries[i].paddr, table_entries[i].value);
-    //}
-    //for(size_t i = 0; i < q; ++i) {
-    //    printf("%lu\n", logical_addresses[i]);
-    //}
+uint64_t find_val_by_addr(uint64_t addr, struct table_entry *table_entries, uint32_t table_entries_num) {
+    for(size_t i = 0; i < table_entries_num; ++i) {
+        if(table_entries[i].paddr == addr) {
+            return table_entries[i].value;
+        }
+    }
 
-    fclose(output);
-    free(table_entries);
-    free(logical_addresses);
     return 0;
 }
